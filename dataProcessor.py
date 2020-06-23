@@ -258,12 +258,12 @@ def applyRegr(anchorMatrix,regrInfo):
 
 		centerX = x + w / 2.
 		centerY = y + h / 2.
-		CenterX1 = tx * w + centerX
+		centerX1 = tx * w + centerX
 		centerY1 = ty * h + centerY
 
 		w1 = np.exp(tw.astype(float64)) * w
 		h1 = np.exp(th.astype(float64)) * h
-		x1 = CenterX1 - w1 / 2.
+		x1 = centerX1 - w1 / 2.
 		y1 = centerY1 - h1 / 2.
 
 		x1 = np.round(x1)
@@ -387,10 +387,6 @@ def roiHead(anchorMatrix, imgData):
 	resizeWidth,resizeHeight = resizeImg(width,height)
 
 	groudTruthAnchor = np.zeros((boxNum, 4))
-
-	classInfo = []
-	regrLabel = []
-	regrCoord = []
 	
 	index = 0
 	for item in imgData['bboxes']:
@@ -401,6 +397,9 @@ def roiHead(anchorMatrix, imgData):
 		index += 1
 
 	roiList = []
+	classInfo = []
+	regrLabel = []
+	regrCoord = []
 
 	for index in range(anchorMatrix.shape[0]):
 		(x1,y1,x2,y2) = anchorMatrix[index, :]
@@ -441,7 +440,7 @@ def roiHead(anchorMatrix, imgData):
 				tx = (groudTruthCenterX - anchorCenterX) / float(w)
 				ty = (groudTruthCenterY - anchorCenterY) / float(h)
 				tw = np.log((groudTruthAnchor[best_bbox,1] - groudTruthAnchor[best_bbox,0]) / float(w))
-				th = np.log((groudTruthAnchor[best_bbox,3] - groudTruthAnchor[best_bbox,2]) / float(w))
+				th = np.log((groudTruthAnchor[best_bbox,3] - groudTruthAnchor[best_bbox,2]) / float(h))
 			else:
 				raise RuntimeError
 
@@ -465,10 +464,39 @@ def roiHead(anchorMatrix, imgData):
 	if len(roiList) == 0:
 		return None,None,None
 
-	X = np.array(roiList)
+	X2 = np.array(roiList)
 	Y1 = np.array(classInfo)
 	Y2 = np.concatenate([np.array(regrLabel),np.array(regrCoord)],axis=1)
-	return np.expand_dims(X,axis = 0), np.expand_dims(Y1,axis = 0), np.expand_dims(Y2,axis = 0)
+	return np.expand_dims(X2,axis = 0), np.expand_dims(Y1,axis = 0), np.expand_dims(Y2,axis = 0)
+
+def roiSelect(Y1,roiNum = 4):
+	
+	negSamples = np.where(Y1[0, :, -1] == 1)
+	posSamples = np.where(Y1[0, :, -1] == 0)
+
+	if len(negSamples) > 0:
+		negSamples = negSamples[0]
+	else:
+		negSamples = []
+	if len(posSamples) > 0:
+		posSamples = posSamples[0]
+	else:
+		posSamples = []
+
+	if len(posSamples) < roiNum // 2:
+		selectPos = posSamples.tolist()
+	else:
+		selectPos = np.random.choice(posSamples, roiNum // 2, replace=False).tolist()
+
+	try:
+		selectNeg = np.random.choice(negSamples, roiNum - len(selectPos), replace=False).tolist()
+	except:
+		selectNeg = np.random.choice(negSamples, roiNum - len(selectPos), replace=True).tolist()
+
+	selectSamples = selectPos + selectNeg
+
+	return copy.deepcopy(selectSamples)
+
 
 def getData(imgInfo,basePath = '/content/drive/My Drive/Colab Notebooks/',useAugment = True):
 
