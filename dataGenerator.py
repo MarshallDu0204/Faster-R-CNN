@@ -1,289 +1,216 @@
-import numpy as np
-import copy
+import pandas as pd
+from tqdm import tqdm
+import os
+import csv
+from urllib.request import urlretrieve
+import threading
 import math
-import random
 import json
 import cv2
+import shutil
+import numpy as np
 
-def readJson(basePath = '/content/drive/My Drive/Colab Notebooks/'):
-	with open(basePath+"dataInfo.json","r") as file:
-		imgInfo = json.load(fp = file)
-		imgList = []
-		for key in imgInfo:
-			imgList.append(imgInfo[key])
-		return imgList
+outputInfo = []
+downloadedSet = set()
+downloadedCont = 0
 
-def augmentImg(singleImg,useAugment = True):
-	imgData = copy.deepcopy(singleImg)
-	img = cv2.imread(imgData['path'])
+def getDataLength(path = 'oidv6-train-annotations-bbox.csv'):
+	count = 0
+	fp = open(path, 'r', encoding='utf-8')
+	while 1:
+		buffer = fp.read(8 * 1024 * 1024)
+		if not buffer:
+			break
+		count += buffer.count('\n')
 
-	if useAugment:
-		rows,cols = img.shape[:2]
+	fp.close()
+	return count
 
-		if np.random.randint(0,2) == 0:
-			img = cv2.flip(img,1)
-			bboxesList = imgData['bboxes']
-			for line in imgData['bboxes']:
-				tempX = line[1]
-				line[1] = cols - line[2]
-				line[2] = cols - tempX
+def getImgDict():
+	imgDict = {'/m/01g317':'Person', '/m/01c648':'Laptop',
+	'/m/01yrx':'Cat', '/m/06nrc':'Shotgun', '/m/0k4j':'Car', '/m/0dzct':'Human face'}
+	return imgDict
 
-		if np.random.randint(0,2) == 0:
-			img = cv2.flip(img,0)
-			bboxesList = imgData['bboxes']
-			for line in imgData['bboxes']:
-				tempY = line[3]
-				line[3] = rows - line[4]
-				line[4] = rows - tempY
+def getFullClass():
+	fullClass = {'Person':1, 'Laptop':2, 'Cat':3, 'Shotgun':4, 'Car':5, 'Human face':6, 'BG':7}
+	return fullClass
+	
+def readData(chunkLen = 300000):
+	infoSet = {'/m/01g317', '/m/01c648', '/m/01yrx', '/m/06nrc', '/m/0k4j', '/m/0dzct'}
+	infoList = []
+	
+	chunks = pd.read_csv('oidv6-train-annotations-bbox.csv', chunksize = chunkLen)
+	i = 0
+	for chunk in chunks:
+		for index in tqdm(range(chunkLen)):
+			if chunk.loc[index][chunk.index[2]] in infoSet:
+				tempList = []
+				tempList.append(chunk.loc[index][chunk.index[0]])
+				tempList.append(chunk.loc[index][chunk.index[2]])
+				tempList.append(chunk.loc[index][chunk.index[4]])
+				tempList.append(chunk.loc[index][chunk.index[5]])
+				tempList.append(chunk.loc[index][chunk.index[6]])
+				tempList.append(chunk.loc[index][chunk.index[7]])
+				infoList.append(tempList)
+				
+		i += 1
+		if i == 1:#only download the first chunk is enough!
+			break
 
-		rotAngle = np.random.choice([0,90,180,270],1)[0]
+	return infoList
 
-		if rotAngle == 0:
-			pass
+def slice(arr, m):
+	n = int(math.ceil(len(arr) / float(m)))
+	return [arr[i:i + n] for i in range(0, len(arr), n)]
 
-		if rotAngle == 90:
-			img = np.transpose(img, (1,0,2))
-			img = cv2.flip(img,1)
-			for line in imgData['bboxes']:
-				tempX1 = line[1]
-				tempX2 = line[2]
-				line[1] = rows - line[4]
-				line[2] = rows - line[3]
-				line[3] = tempX1
-				line[4] = tempX2
 
-		if rotAngle == 180:
-			img = cv2.flip(img,-1)
-			for line in imgData['bboxes']:
-				tempX = line[2]
-				tempY = line[4]
-				line[2] = cols - line[1]
-				line[1] = cols - tempX
-				line[4] = rows - line[3]
-				line[3] = rows - tempY
+def loadImgSingle(subInfoList, nameList, urlList):
+	global downloadedSet
+	global outputInfo
+	global downloadedCont
+	initDir = "D://"
+	imgDict = getImgDict()
+	for item in tqdm(subInfoList):
+		downloadDir = initDir + 'data/' + imgDict[item[1]]
+		img_name = item[0] + ".jpg"
+		if img_name not in downloadedSet:
+			downloadedSet.add(img_name)
+			url = urlList[nameList.index(img_name)]
+			saveDir = downloadDir + "/" + img_name
+			urlretrieve(url,saveDir)
+			downloadedCont += 1
+		tempList = [item[0],imgDict[item[1]],item[2],item[3],item[4],item[5]]
+		outputInfo.append(tempList)
 
-		if rotAngle == 270:
-			img = np.transpose(img, (1,0,2))
-			img = cv2.flip(img,0)
-			for line in imgData['bboxes']:
-				tempX1 = line[1]
-				tempX2 = line[2]
-				line[1] = line[3]
-				line[2] = line[4]
-				line[3] = cols - tempX2
-				line[4] = cols - tempX1
+def downloadImgThread(infoList, threadNum = 10, initDir = 'D://'):
+	global downloadedSet
+	global outputInfo
+	global downloadedCont
 
-	imgData['width'] = img.shape[1]
-	imgData['height'] = img.shape[0]
+	if not os.path.exists(initDir + "data"):
+		os.mkdir(initDir + "data")
+	
+	imgDict = getImgDict()
 
-	return imgData,img
+	for key in imgDict:
+		if not os.path.exists(initDir + "data/" + imgDict[key]):
+			os.mkdir(initDir + "data/" + imgDict[key])
 
-def resizeImg(oriWidth,oriHeight,limit = 300):
-	if oriWidth <= oriHeight:
-		div = float(limit) / oriWidth
-		outWidth = limit
-		outHeight = int(oriHeight * div)
-	else:
-		div = float(limit) / oriHeight
-		outWidth = int(oriWidth * div)
-		outHeight = limit
+	nameList = []
+	urlList = []
+	infoData = []
 
-	return outWidth,outHeight
+	with open("train-images-boxable.csv", 'r', encoding = 'utf-8') as file:
+		lines = csv.reader(file)
+		for line in lines:
+			infoData.append(line)
+		infoData = infoData[1:len(infoData)]
+		for element in infoData:
+			nameList.append(element[0])
+			urlList.append(element[1])
 
-def calcIoU(regionA,regionB):
-	if regionA[0] > regionA[2] or regionA[1] > regionA[3] or regionB[0] > regionB[2] or regionB[1] > regionB[3]:
-		return 0.0
+	sliceList = slice(infoList,threadNum)
+	
+	threadList = []
+	for i in range(threadNum):
+		threadList.append(threading.Thread(target = loadImgSingle, args = (sliceList[i],nameList,urlList)))
+
+	for i in range(threadNum):
+		threadList[i].start()
+
+	for i in range(threadNum):
+		threadList[i].join()
+
+	with open('imgInfo.txt','w',encoding = 'utf-8') as file:
+		for element in tqdm(outputInfo):
+			tempStr = str(element[0]) + "|" + str(element[1]) + "|" + str(element[2]) + "|" + str(element[3]) + "|" + str(element[4]) + "|" + str(element[5]) + "\n"
+			file.writelines(tempStr)
+
+def integrateImg(basePath = 'D://'):
+	dirList = os.listdir(basePath + 'data/')
+	for item in tqdm(dirList):
+		dirPath = basePath + 'data/' + item + '/'
+		imgList = os.listdir(dirPath)
+		for img in imgList:
+			srcPath = dirPath + img
+			destPath = basePath + 'data/' + img
+			shutil.move(srcPath,destPath)
+		os.rmdir(dirPath)
+
+
+def retriveData(basePath = 'D://'):
+	chartDict = {'Person':1, 'Laptop':2, 'Cat':3, 'Shotgun':4, 'Car':5, 'Human face':6}
+
+	imgInfo = {}
+	imgInfoList = "imgInfo.txt"
+	colabPath = '/content/drive/My Drive/Colab Notebooks/data/'
+	imgDir = basePath+"data/"
+
+	with open(imgInfoList, 'r', encoding = 'utf-8') as file:
+		infoList = file.readlines()
 		
-	xLeft = max(regionA[0],regionB[0])
-	xRight = min(regionA[2],regionB[2])
-	yTop = max(regionA[1],regionB[1])
-	yBottom = min(regionA[3],regionB[3])
+		for element in tqdm(infoList):
+			tempList = []
+			element = element.split("|")
+			element[5] = element[5].strip()
+			if element[0] not in imgInfo:
+				img = cv2.imread(imgDir + element[0] + ".jpg")
+				(rows,cols) = img.shape[:2]
+				tempDict = {}
+				tempDict['path'] = colabPath + element[0] + ".jpg"
+				tempDict['width'] = cols
+				tempDict['height'] = rows
+				tempDict['bboxes'] = []
+				imgInfo[element[0]] = tempDict
+			imgWidth = imgInfo[element[0]]['width']
+			imgHeight = imgInfo[element[0]]['height']
+			classNum = int(chartDict[element[1]])
+			xMin = int(imgWidth*float(element[2]))
+			xMax = int(imgWidth*float(element[3]))
+			yMin = int(imgHeight*float(element[4]))
+			yMax = int(imgHeight*float(element[5]))
+			boxInfo = [classNum, xMin, xMax, yMin, yMax]
+			imgInfo[element[0]]['bboxes'].append(boxInfo)
+			
+	return imgInfo
 
-	if xRight < xLeft or yBottom < yTop:
-		return 0.0
+def saveJson(imgInfo):
+	with open("dataInfo.json", "w") as file:
+		json.dump(imgInfo, file, ensure_ascii=False)
 
-	intersec = (xRight - xLeft) * (yBottom - yTop)
-
-	areaA = (regionA[2] - regionA[0]) * (regionA[3] - regionA[1])
-	areaB = (regionB[2] - regionB[0]) * (regionB[3] - regionB[1])
-
-	union = areaA + areaB - intersec
-
-	return float(intersec) / float(union + 1e-6)
+def computeChannelMean(basePath = 'D://'):
+	imgDir = basePath + 'data/'
+	imgList = os.listdir(imgDir)
+	firstChannel = []
+	secondChannel = []
+	thirdChannel = []
 	
+	for item in tqdm(imgList):
+		imgPath = imgDir + item
+		img = cv2.imread(imgPath)
+		img = img[:,:, (2, 1, 0)]
+		img = img.astype(np.float32)
+		firstChannel.append(np.mean(img[:,:,0]))
+		secondChannel.append(np.mean(img[:,:,1]))
+		thirdChannel.append(np.mean(img[:,:,2]))
 
-def calcAnchors(imgData,width,height,resizeWidth,resizeHeight,shrinkFactor = 16):
-	minIoU = 0.3
-	maxIoU = 0.7
-	anchorNum = 9
-	anchorSize = [64,128,256]
-	anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
-	outWidth = resizeWidth // shrinkFactor
-	outHeight = resizeHeight // shrinkFactor
+	firstChannel = np.array(firstChannel)
+	secondChannel = np.array(secondChannel)
+	thirdChannel = np.array(thirdChannel)
+	avg1 = np.mean(firstChannel)
+	avg2 = np.mean(secondChannel)
+	avg3 = np.mean(thirdChannel)
 
-	anc_obj = np.zeros((outHeight, outWidth, anchorNum))
-	anc_valid = np.zeros((outHeight, outWidth, anchorNum))
-	anc_regr = np.zeros((outHeight, outWidth, anchorNum * 4))
+	print(avg1,avg2,avg3)
+	#114.45 105.69 98.96
+'''
+infoList = readData()
+downloadImgThread(infoList,threadNum = 20)
+'''
+#integrateImg()
+'''
+imgInfo = retriveData()
+saveJson(imgInfo)
+'''
+#computeChannelMean()
 
-	boxNum = len(imgData['bboxes'])
-	
-	bboxesAnchorNum = np.zeros(boxNum).astype(int)
-	bestAnchor = -1 * np.zeros((boxNum, 4)).astype(int)
-	bestIoU = np.zeros(boxNum).astype(np.float32)
-	bestBoxRegr = np.zeros((boxNum, 4)).astype(np.float32)
-
-	groudTruthAnchor = np.zeros((boxNum, 4))
-	
-	index = 0
-	for item in imgData['bboxes']:
-		groudTruthAnchor[index,0] = item[1] * (resizeWidth / float(width))
-		groudTruthAnchor[index,1] = item[2] * (resizeWidth / float(width))
-		groudTruthAnchor[index,2] = item[3] * (resizeHeight / float(height))
-		groudTruthAnchor[index,3] = item[4] * (resizeHeight / float(height))
-		index += 1
-
-	for size in range(len(anchorSize)):
-
-		for ratio in range(len(anchorRatio)):
-			anchorX = anchorSize[size] * anchorRatio[ratio][0]
-			anchorY = anchorSize[size] * anchorRatio[ratio][1]
-
-			for pixelX in range(outWidth):
-				curX1 = shrinkFactor * (pixelX + 0.5) - anchorX / 2
-				curX2 = shrinkFactor * (pixelX + 0.5) + anchorX / 2
-				if curX1 < 0 or curX2 > resizeWidth:
-					continue
-
-				for pixelY in range(outHeight):
-					curY1 = shrinkFactor * (pixelY + 0.5) - anchorY / 2
-					curY2 = shrinkFactor * (pixelY + 0.5) + anchorY / 2
-					if curY1 < 0 or curY2 > resizeHeight:
-						continue
-					bboxesType = 'false'
-					bestPosIoU = 0.0
-
-					for item in range(boxNum):
-						regionA = [groudTruthAnchor[item,0],groudTruthAnchor[item,2],groudTruthAnchor[item,1],groudTruthAnchor[item,3]]
-						regionB = [curX1,curY1,curX2,curY2]
-						anchorIoU = calcIoU(regionA,regionB)
-
-						if anchorIoU > bestIoU[item] or anchorIoU > maxIoU:
-							groudTruthCenterX = (groudTruthAnchor[item,0] + groudTruthAnchor[item,1]) / 2.0
-							groudTruthCenterY = (groudTruthAnchor[item,2] + groudTruthAnchor[item,3]) / 2.0
-							anchorCenterX = (curX1 + curX2) / 2.0
-							anchorCenterY = (curY1 + curY2) / 2.0
-
-							tx = (groudTruthCenterX - anchorCenterX) / (curX2 - curX1)
-							ty = (groudTruthCenterY - anchorCenterY) / (curY2 - curY1)
-							tw = np.log((groudTruthAnchor[item,1] - groudTruthAnchor[item,0]) / (curX2 - curX1))
-							th = np.log((groudTruthAnchor[item,3] - groudTruthAnchor[item,2]) / (curY2 - curY1))
-
-						if anchorIoU > bestIoU[item]:
-							bestAnchor[item] = [pixelY, pixelX, ratio, size]
-							bestIoU[item] = anchorIoU
-							bestBoxRegr[item,:] = [tx, ty, tw, th]
-						
-						if anchorIoU > maxIoU:
-							bboxesType = 'true'
-							bboxesAnchorNum[item] += 1
-							if anchorIoU > bestPosIoU:
-								bestPosIoU = anchorIoU
-								bestPosRegr = (tx,ty,tw,th)
-
-						if minIoU < anchorIoU < maxIoU:
-							if bboxesType != 'true':
-								bboxesType = 'neutral'
-
-					if bboxesType == 'false':
-						anc_valid[pixelY,pixelX,ratio + 3 * size] = 1
-						anc_obj[pixelY,pixelX,ratio + 3 * size] = 0
-
-					elif bboxesType == 'neutral':
-						anc_valid[pixelY,pixelX,ratio + 3 * size] = 0
-						anc_obj[pixelY,pixelX,ratio + 3 * size] = 0
-					
-					elif bboxesType == 'true':
-						anc_valid[pixelY,pixelX,ratio+3 * size] = 1
-						anc_obj[pixelY,pixelX,ratio+3 * size] = 1
-						regrIndex = 4 * (ratio + 3 * size)
-						anc_regr[pixelY,pixelX,regrIndex:regrIndex + 4] = bestPosRegr
-
-	for index in range(bboxesAnchorNum.shape[0]):
-		if bboxesAnchorNum[index] == 0:
-			if bestAnchor[index,0] == -1:
-				continue
-			anc_valid[bestAnchor[index,0],bestAnchor[index,1],bestAnchor[index,2] + 3 * bestAnchor[index,3]] = 1
-			anc_obj[bestAnchor[index,0],bestAnchor[index,1],bestAnchor[index,2] + 3 * bestAnchor[index,3]] = 1
-			regrIndex = 4 * (bestAnchor[index,2] + 3 * bestAnchor[index,3])
-			anc_regr[bestAnchor[index,0],bestAnchor[index,1],regrIndex:regrIndex + 4] = bestBoxRegr[index,:]
-	
-	anc_obj = np.transpose(anc_obj,(2,0,1))
-	anc_obj = np.expand_dims(anc_obj,axis = 0)
-
-	anc_valid = np.transpose(anc_valid,(2,0,1))
-	anc_valid = np.expand_dims(anc_valid,axis = 0)
-
-	anc_regr = np.transpose(anc_regr,(2,0,1))
-	anc_regr = np.expand_dims(anc_regr,axis = 0)
-
-	
-	pos_anchor = np.where(np.logical_and(anc_obj[0, :, :, :] == 1, anc_valid[0, :, :, :] == 1))
-	neg_anchor = np.where(np.logical_and(anc_obj[0, :, :, :] == 0, anc_valid[0, :, :, :] == 1))
-
-	posAnchorNum = len(pos_anchor[0])
-
-	limitAnchorNum = 256
-	
-	if len(pos_anchor[0]) > limitAnchorNum / 2:
-		ignoreAnchor = random.sample(range(len(pos_anchor[0])),len(pos_anchor[0]) - limitAnchorNum / 2)
-		anc_valid[0,pos_anchor[0][ignoreAnchor],pos_anchor[1][ignoreAnchor],pos_anchor[2][ignoreAnchor]] = 0
-		posAnchorNum = limitAnchorNum/2
-
-	if len(neg_anchor[0]) + posAnchorNum > limitAnchorNum:
-		ignoreAnchor = random.sample(range(len(neg_anchor[0])),len(neg_anchor[0]) - posAnchorNum)
-		anc_valid[0,neg_anchor[0][ignoreAnchor],neg_anchor[1][ignoreAnchor],neg_anchor[2][ignoreAnchor]] = 0
-	
-	rpn_Class = np.concatenate([anc_valid, anc_obj], axis = 1)
-	rpn_Regr = np.concatenate([np.repeat(anc_obj, 4, axis = 1), anc_regr], axis = 1)
-	return np.copy(rpn_Class),np.copy(rpn_Regr)
-
-def getData(imgInfo,basePath = '/content/drive/My Drive/Colab Notebooks/',useAugment = True):
-
-	for imgData in imgInfo:
-		try:
-			if useAugment:
-				imgData,img = augmentImg(imgData)
-			else:
-				imgData,img = augmentImg(imgData,useAugment = False)
-			resizeWidth,resizeHeight = resizeImg(imgData['width'],imgData['height'])
-			img = cv2.resize(img,(resizeWidth,resizeHeight),interpolation=cv2.cv2.INTER_CUBIC)
-
-			try:
-				rpn_Class,rpn_Regr = calcAnchors(imgData,imgData['width'],imgData['height'],resizeWidth,resizeHeight)
-			except:
-				continue
-
-			#img = img[:,:, (2, 1, 0)] #BGR--> RGB
-			img = img.astype(np.float32)
-			channelMean = [103.939, 116.779, 123.68]
-			#channelMean = [114.45,105.69,98.96]
-			img[:,:,0] = img[:,:,0] - channelMean[0]
-			img[:,:,1] = img[:,:,1] - channelMean[1]
-			img[:,:,2] = img[:,:,2] - channelMean[2]
-
-			img = np.transpose(img,(2,0,1))
-			img = np.expand_dims(x_img, axis=0)
-			img = np.transpose(img, (0, 2, 3, 1))
-
-			stdevScaleFactor = 4.0
-
-			rpn_Regr[:,rpn_Regr.shape[1]//2:, :, :] *= stdevScaleFactor
-
-			rpn_Class = np.transpose(rpn_Class, (0, 2, 3, 1))
-			rpn_Regr = np.transpose(rpn_Regr, (0, 2, 3, 1))
-
-			yield img,[rpn_Class,rpn_Regr],imgData
-
-		except Exception as e:
-			print(e)
-			continue
