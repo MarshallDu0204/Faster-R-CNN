@@ -11,8 +11,13 @@ from keras import backend as K
 from keras.optimizers import Adam, SGD, RMSprop
 from keras.layers import Flatten, Dense, Input, Conv2D, MaxPooling2D, Dropout
 from keras.layers import GlobalAveragePooling2D, GlobalMaxPooling2D, TimeDistributed
+from keras.engine.topology import get_source_inputs
+from keras.utils import layer_utils
+from keras.utils.data_utils import get_file
+from keras.objectives import categorical_crossentropy
 
 from keras.models import Model
+from keras.utils import generic_utils
 from keras.engine import Layer, InputSpec
 from keras import initializers, regularizers
 sys.path.append('/content/drive/My Drive/Colab Notebooks/')
@@ -189,14 +194,12 @@ def trainModel():
 			model_classifier.load_weights(modelPath + 'vgg16_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
 		except:
 			print('load weights failed')
-		record_df = pd.DataFrame(columns=['mean_overlapping_bboxes', 'class_acc', 'loss_rpn_cls', 'loss_rpn_regr', 'loss_class_cls', 'loss_class_regr', 'curr_loss', 'elapsed_time', 'mAP'])
+		record_df = pd.DataFrame(columns=['class_acc', 'loss_rpn_cls', 'loss_rpn_regr', 'loss_class_cls', 'loss_class_regr', 'curr_loss', 'elapsed_time', 'mAP'])
 	else:
 		model_rpn.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
 		model_classifier.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
 
-		 record_df = pd.read_csv(record_path)
-
-		r_mean_overlapping_bboxes = record_df['mean_overlapping_bboxes']
+		record_df = pd.read_csv(record_path)
 		r_class_acc = record_df['class_acc']
 		r_loss_rpn_cls = record_df['loss_rpn_cls']
 		r_loss_rpn_regr = record_df['loss_rpn_regr']
@@ -215,8 +218,6 @@ def trainModel():
 	r_epochs = len(record_df)
 
 	losses = np.zeros((epoch_length, 5))
-	rpn_accuracy_rpn_monitor = []
-	rpn_accuracy_for_epoch = []
 
 	if len(record_df)==0:
 		best_loss = np.Inf
@@ -225,6 +226,11 @@ def trainModel():
 	
 	start_time = time.time()
 	for epochNum in range(num_epochs):
+
+		progbar = generic_utils.Progbar(epoch_length)
+		print('Epoch {}/{}'.format(r_epochs + 1, total_epochs))
+		r_epochs += 1
+
 		while True:
 			try:
 				X, Y, imgData = next(trainData)
@@ -236,12 +242,59 @@ def trainModel():
 					continue
 				selectSamples = dataProcessor.roiSelect(Y1)
 				loss_class = model_classfier.train_on_batch([X, X2[:, selectSamples, :]], [Y1[:, selectSamples, :], Y2[:, selectSamples, :]])
+				losses[iter_num, 0] = loss_rpn[1]
+				losses[iter_num, 1] = loss_rpn[2]
+
+				losses[iter_num, 2] = loss_class[1]
+				losses[iter_num, 3] = loss_class[2]
+				losses[iter_num, 4] = loss_class[3]
 
 				iterNum += 1
 
+				progbar.update(iter_num, [('rpn_cls', np.mean(losses[:iter_num, 0])), ('rpn_regr', np.mean(losses[:iter_num, 1])),
+									('final_cls', np.mean(losses[:iter_num, 2])), ('final_regr', np.mean(losses[:iter_num, 3]))])
+
 				if iterNum == epochLength:
-					iterNum = 0
+					loss_rpn_cls = np.mean(losses[:, 0])
+					loss_rpn_regr = np.mean(losses[:, 1])
+					loss_class_cls = np.mean(losses[:, 2])
+					loss_class_regr = np.mean(losses[:, 3])
+					class_acc = np.mean(losses[:, 4])
+
+					print('Classifier accuracy for bounding boxes from RPN: {}'.format(class_acc))
+					print('Loss RPN classifier: {}'.format(loss_rpn_cls))
+					print('Loss RPN regression: {}'.format(loss_rpn_regr))
+					print('Loss Detector classifier: {}'.format(loss_class_cls))
+					print('Loss Detector regression: {}'.format(loss_class_regr))
+					print('Total loss: {}'.format(loss_rpn_cls + loss_rpn_regr + loss_class_cls + loss_class_regr))
+					print('Elapsed time: {}'.format(time.time() - start_time))
+					elapsed_time = (time.time()-start_time)/60
+
+					curr_loss = loss_rpn_cls + loss_rpn_regr + loss_class_cls + loss_class_regr
+					iter_num = 0
+					start_time = time.time()
+
+					if curr_loss < best_loss:
+						best_loss = curr_loss
+						model_all.save_weights(modelPath + 'frcnn_vgg.hdf5')
+
+					new_row = {'class_acc':round(class_acc, 3), 
+							'loss_rpn_cls':round(loss_rpn_cls, 3), 
+							'loss_rpn_regr':round(loss_rpn_regr, 3), 
+							'loss_class_cls':round(loss_class_cls, 3), 
+							'loss_class_regr':round(loss_class_regr, 3), 
+							'curr_loss':round(curr_loss, 3), 
+							'elapsed_time':round(elapsed_time, 3), 
+							'mAP': 0}
+
+					record_df = record_df.append(new_row, ignore_index=True)
+					record_df.to_csv(record_path, index=0)
+
 					break
+			except Exception as e:
+				print(e)
+				continue
+	print('Train Complete!')
 
 def testModel():
 	pass
