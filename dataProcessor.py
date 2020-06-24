@@ -524,7 +524,7 @@ def getData(imgInfo,basePath = '/content/drive/My Drive/Colab Notebooks/',useAug
 				img[:,:,2] = img[:,:,2] - channelMean[2]
 
 				img = np.transpose(img, (2,0,1))
-				img = np.expand_dims(x_img, axis=0)
+				img = np.expand_dims(img, axis=0)
 				img = np.transpose(img, (0, 2, 3, 1))
 
 				stdevScaleFactor = 4.0

@@ -4,6 +4,7 @@ import os
 import numpy as np
 import sys
 from matplotlib import pyplot as plt
+import random
 
 from keras import backend as K
 from keras.optimizers import Adam, SGD, RMSprop
@@ -13,12 +14,13 @@ from keras.layers import GlobalAveragePooling2D, GlobalMaxPooling2D, TimeDistrib
 from keras.models import Model
 from keras.engine import Layer, InputSpec
 from keras import initializers, regularizers
+sys.path.append('/content/drive/My Drive/Colab Notebooks/')
+import dataProcessor
+import dataGenerator
 
-sys.path.add('/content/drive/My Drive/Colab Notebooks/')
+def vgg16(input_tensor=None,trainable = False):
 
-def vgg16(input_tensor = None, trainable = False):
-
-	inputImg = Input(shape = (None,None,3))
+	inputImg = input_tensor
 
 	x = Conv2D(64, (3,3), activation = 'relu', padding = 'same', name = 'block1_conv1')(inputImg)
 	x = Conv2D(64, (3,3), activation = 'relu', padding = 'same', name = 'block1_conv2')(x)
@@ -102,12 +104,11 @@ class roiPooling(Layer):
 		base_config = super(RoiPoolingConv, self).get_config()
 		return dict(list(base_config.items()) + list(config.items()))
 
-
-def classifier(baseLayer, RoI, roiNum, classNum = 7):
+def classifierLayer(baseLayer, roiInput, roiNum = 4, classNum = 7):
 
 	pool_size = 7
 
-	roiPoolingResult = RoiPoolingConv(pool_size,roiNum)([baseLayer, RoI])
+	roiPoolingResult = RoiPoolingConv(pool_size,roiNum)([baseLayer, roiInput])
 
 	x = TimeDistributed(Flatten(name = 'flatten'))(roiPoolingResult)
 
@@ -134,14 +135,12 @@ def rpn_loss_regr(num_anchors):
 
 	return rpn_loss_regr_fixed_num
 
-
 def rpn_loss_cls(num_anchors):
 
 	def rpn_loss_cls_fixed_num(y_true, y_pred):
 			return 1.0 * K.sum(y_true[:, :, :, :num_anchors] * K.binary_crossentropy(y_pred[:, :, :, :], y_true[:, :, :, num_anchors:])) / K.sum(1e-4 + y_true[:, :, :, :num_anchors])
 
 	return rpn_loss_cls_fixed_num
-
 
 def class_loss_regr(num_classes):
 	def class_loss_regr_fixed_num(y_true, y_pred):
@@ -151,12 +150,69 @@ def class_loss_regr(num_classes):
 		return 1.0 * K.sum(y_true[:, :, :4 * num_classes] * (x_bool * (0.5 * x * x) + (1 - x_bool) * (x_abs - 0.5))) / K.sum(1e-4 + y_true[:, :, :4 * num_classes])
 	return class_loss_regr_fixed_num
 
-
 def class_loss_cls(y_true, y_pred):
 	return 1.0 * K.mean(categorical_crossentropy(y_true[0, :, :], y_pred[0, :, :]))
 
-'''
-baseLayer = vgg16(trainable = True)
-rpn = rpnLayer(baseLayer)
-'''
+def trainModel():
+	imgList = dataProcessor.readJson()
+	random.seed(1)
+	random.shuffle(imgList)
+	trainData = dataProcessor.getData(imgList)
 
+	img_input = Input(shape=(None, None, 3))
+	roi_input = Input(shape=(None, 4))
+
+	anchorNum = 9
+	classNum = 7
+
+	vggLayer = vgg16(input_tensor = img_input, trainable = True)
+	rpn = rpnLayer(vggLayer)
+	classifier = classifierLayer(vggLayer,roi_input)
+
+	model_rpn = Model(img_input, rpn[:2])
+	model_classfier = Model([img_input,roiInput], classifier)
+	model_all = Model([img_input,roiInput], rpn[:2] + classifier)
+
+	optimizer = Adam(lr = 1e-5)
+	optimizer_classfier = Adam(lr = 1e-5)
+	model_rpn.compile(optimizer = optimizer, loss = [rpn_loss_cls(anchorNum), rpn_loss_regr(anchorNum)])
+	model_classfier.compile(optimizer = optimizer_classfier, loss = [class_loss_cls, class_loss_regr(classNum - 1)], metrics={'dense_class_{}'.format(classNum): 'accuracy'})
+	model_all.compile(optimizer = 'sgd', loss = 'mae')
+
+	modelPath = '/content/drive/My Drive/Colab Notebooks/model/'
+
+	if not os.path.isfile(modelPath + 'frcnn_vgg.hdf5'):
+		try:
+			model_rpn.load_weights(modelPath + 'vgg16_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
+			model_classifier.load_weights(modelPath + 'vgg16_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
+		except:
+			print('load weights failed')
+
+	else:
+		model_rpn.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
+		model_classifier.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
+
+
+	num_epochs = 40
+	epochLength = 2000
+	iterNum = 0
+	for epochNum in range(num_epochs):
+		while True:
+			try:
+				X, Y, imgData = next(trainData)
+				loss_rpn = model_rpn.train_on_batch(X,Y)
+				proposal = model_rpn.predict_on_batch(X)
+				roi = dataProcessor.proposalCreator(proposal[0], proposal[1])
+				X2, Y1, Y2 = dataProcessor.roiHead(roi, imgData)
+				if X2 is None:
+					continue
+				selectSamples = dataProcessor.roiSelect(Y1)
+				loss_class = model_classfier.train_on_batch([X, X2[:, selectSamples, :]], [Y1[:, selectSamples, :], Y2[:, selectSamples, :]])
+
+				iterNum += 1
+
+				if iterNum == epochLength:
+					iterNum = 0
+					break
+
+testData()
