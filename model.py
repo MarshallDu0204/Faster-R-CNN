@@ -194,12 +194,14 @@ def trainModel():
 			model_classifier.load_weights(modelPath + 'vgg16_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
 		except:
 			print('load weights failed')
-		record_df = pd.DataFrame(columns=['class_acc', 'loss_rpn_cls', 'loss_rpn_regr', 'loss_class_cls', 'loss_class_regr', 'curr_loss', 'elapsed_time', 'mAP'])
+		record_df = pd.DataFrame(columns=['mean_overlapping_bboxes', 'class_acc', 'loss_rpn_cls', 'loss_rpn_regr', 'loss_class_cls', 'loss_class_regr', 'curr_loss', 'elapsed_time', 'mAP'])
 	else:
 		model_rpn.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
 		model_classifier.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
 
 		record_df = pd.read_csv(record_path)
+
+		r_mean_overlapping_bboxes = record_df['mean_overlapping_bboxes']
 		r_class_acc = record_df['class_acc']
 		r_loss_rpn_cls = record_df['loss_rpn_cls']
 		r_loss_rpn_regr = record_df['loss_rpn_regr']
@@ -219,6 +221,9 @@ def trainModel():
 
 	losses = np.zeros((epoch_length, 5))
 
+	rpn_accuracy_rpn_monitor = []
+	rpn_accuracy_for_epoch = []
+
 	if len(record_df)==0:
 		best_loss = np.Inf
 	else:
@@ -233,14 +238,24 @@ def trainModel():
 
 		while True:
 			try:
+				if len(rpn_accuracy_rpn_monitor) == epoch_length and C.verbose:
+					mean_overlapping_bboxes = float(sum(rpn_accuracy_rpn_monitor))/len(rpn_accuracy_rpn_monitor)
+					rpn_accuracy_rpn_monitor = []
+					if mean_overlapping_bboxes == 0:
+						print('RPN is not producing bounding boxes that overlap the ground truth boxes. Check RPN settings or keep training.')
+
 				X, Y, imgData = next(trainData)
 				loss_rpn = model_rpn.train_on_batch(X,Y)
 				proposal = model_rpn.predict_on_batch(X)
 				roi = dataProcessor.proposalCreator(proposal[0], proposal[1])
 				X2, Y1, Y2 = dataProcessor.roiHead(roi, imgData)
 				if X2 is None:
+					rpn_accuracy_rpn_monitor.append(0)
+					rpn_accuracy_for_epoch.append(0)
 					continue
-				selectSamples = dataProcessor.roiSelect(Y1)
+				selectSamples,posNum = dataProcessor.roiSelect(Y1)
+				rpn_accuracy_rpn_monitor.append(posNum)
+				rpn_accuracy_for_epoch.append(posNum)
 				loss_class = model_classfier.train_on_batch([X, X2[:, selectSamples, :]], [Y1[:, selectSamples, :], Y2[:, selectSamples, :]])
 				losses[iter_num, 0] = loss_rpn[1]
 				losses[iter_num, 1] = loss_rpn[2]
@@ -261,6 +276,10 @@ def trainModel():
 					loss_class_regr = np.mean(losses[:, 3])
 					class_acc = np.mean(losses[:, 4])
 
+					mean_overlapping_bboxes = float(sum(rpn_accuracy_for_epoch)) / len(rpn_accuracy_for_epoch)
+					rpn_accuracy_for_epoch = []
+
+					print('Mean number of bounding boxes from RPN overlapping ground truth boxes: {}'.format(mean_overlapping_bboxes))
 					print('Classifier accuracy for bounding boxes from RPN: {}'.format(class_acc))
 					print('Loss RPN classifier: {}'.format(loss_rpn_cls))
 					print('Loss RPN regression: {}'.format(loss_rpn_regr))
@@ -278,7 +297,8 @@ def trainModel():
 						best_loss = curr_loss
 						model_all.save_weights(modelPath + 'frcnn_vgg.hdf5')
 
-					new_row = {'class_acc':round(class_acc, 3), 
+					new_row = {'mean_overlapping_bboxes':round(mean_overlapping_bboxes, 3),
+							'class_acc':round(class_acc, 3), 
 							'loss_rpn_cls':round(loss_rpn_cls, 3), 
 							'loss_rpn_regr':round(loss_rpn_regr, 3), 
 							'loss_class_cls':round(loss_class_cls, 3), 

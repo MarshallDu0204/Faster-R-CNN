@@ -483,6 +483,8 @@ def roiSelect(Y1,roiNum = 4):
 	else:
 		posSamples = []
 
+	posNum = len(posSamples)
+
 	if len(posSamples) < roiNum // 2:
 		selectPos = posSamples.tolist()
 	else:
@@ -495,7 +497,7 @@ def roiSelect(Y1,roiNum = 4):
 
 	selectSamples = selectPos + selectNeg
 
-	return copy.deepcopy(selectSamples)
+	return copy.deepcopy(selectSamples), posNum
 
 
 def getData(imgInfo,basePath = '/content/drive/My Drive/Colab Notebooks/',useAugment = True):
