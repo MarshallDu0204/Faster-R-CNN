@@ -5,6 +5,7 @@ import numpy as np
 import sys
 from matplotlib import pyplot as plt
 import random
+import time
 
 from keras import backend as K
 from keras.optimizers import Adam, SGD, RMSprop
@@ -180,6 +181,7 @@ def trainModel():
 	model_all.compile(optimizer = 'sgd', loss = 'mae')
 
 	modelPath = '/content/drive/My Drive/Colab Notebooks/model/'
+	record_path = modelPath + 'record.csv'
 
 	if not os.path.isfile(modelPath + 'frcnn_vgg.hdf5'):
 		try:
@@ -187,15 +189,41 @@ def trainModel():
 			model_classifier.load_weights(modelPath + 'vgg16_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
 		except:
 			print('load weights failed')
-
+		record_df = pd.DataFrame(columns=['mean_overlapping_bboxes', 'class_acc', 'loss_rpn_cls', 'loss_rpn_regr', 'loss_class_cls', 'loss_class_regr', 'curr_loss', 'elapsed_time', 'mAP'])
 	else:
 		model_rpn.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
 		model_classifier.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
 
+		 record_df = pd.read_csv(record_path)
+
+		r_mean_overlapping_bboxes = record_df['mean_overlapping_bboxes']
+		r_class_acc = record_df['class_acc']
+		r_loss_rpn_cls = record_df['loss_rpn_cls']
+		r_loss_rpn_regr = record_df['loss_rpn_regr']
+		r_loss_class_cls = record_df['loss_class_cls']
+		r_loss_class_regr = record_df['loss_class_regr']
+		r_curr_loss = record_df['curr_loss']
+		r_elapsed_time = record_df['elapsed_time']
+		r_mAP = record_df['mAP']
+
+		print('Already train %dK batches'% (len(record_df)))
 
 	num_epochs = 40
 	epochLength = 2000
 	iterNum = 0
+	total_epochs = len(record_df) + num_epochs
+	r_epochs = len(record_df)
+
+	losses = np.zeros((epoch_length, 5))
+	rpn_accuracy_rpn_monitor = []
+	rpn_accuracy_for_epoch = []
+
+	if len(record_df)==0:
+		best_loss = np.Inf
+	else:
+		best_loss = np.min(r_curr_loss)
+	
+	start_time = time.time()
 	for epochNum in range(num_epochs):
 		while True:
 			try:
@@ -215,4 +243,5 @@ def trainModel():
 					iterNum = 0
 					break
 
-testData()
+def testModel():
+	pass
