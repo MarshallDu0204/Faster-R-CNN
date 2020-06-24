@@ -261,8 +261,8 @@ def applyRegr(anchorMatrix,regrInfo):
 		centerX1 = tx * w + centerX
 		centerY1 = ty * h + centerY
 
-		w1 = np.exp(tw.astype(float64)) * w
-		h1 = np.exp(th.astype(float64)) * h
+		w1 = np.exp(tw.astype(np.float64)) * w
+		h1 = np.exp(th.astype(np.float64)) * h
 		x1 = centerX1 - w1 / 2.
 		y1 = centerY1 - h1 / 2.
 
@@ -314,7 +314,7 @@ def non_max_suppression_fast(boxes, probs, overlap_threshold = 0.7, max_boxes = 
 		overlap = area_int/(area_union + 1e-6)
 
 		idxs = np.delete(idxs, np.concatenate(([last],
-			np.where(overlap > overlap_thresh)[0])))
+			np.where(overlap > overlap_threshold)[0])))
 
 		if len(pick) >= max_boxes:
 			break
@@ -386,6 +386,8 @@ def roiHead(anchorMatrix, imgData):
 	height = imgData['height']
 	resizeWidth,resizeHeight = resizeImg(width,height)
 
+	boxNum = len(imgData['bboxes'])
+
 	groudTruthAnchor = np.zeros((boxNum, 4))
 	
 	index = 0
@@ -446,11 +448,12 @@ def roiHead(anchorMatrix, imgData):
 
 		classDict = dataGenerator.getFullClass()
 		classLabel = len(classDict) * [0]
-		classLabel[classNum] = 1
+		classLabel[classNum - 1] = 1
 		classInfo.append(copy.deepcopy(classLabel))
 		coords = [0] * 4 * (len(classDict) - 1)
 		labels = [0] * 4 * (len(classDict) - 1)
 		if classNum != 7:
+			classNum = classNum - 1
 			pos = 4 * classNum
 			regrStd = [8.0, 8.0, 4.0, 4.0]
 			coords[pos:pos + 4] = [tx * regrStd[0], ty * regrStd[1], tw * regrStd[2], th * regrStd[3]]

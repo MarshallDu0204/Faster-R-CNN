@@ -65,12 +65,10 @@ def rpnLayer(baseLayer,anchorNum = 9):
 class roiPooling(Layer):
 	
 	def __init__(self, pool_size, num_rois, **kwargs):
-		
-		self.dim_ordering = K.image_dim_ordering()
 		self.pool_size = pool_size
 		self.num_rois = num_rois
 
-		super(RoiPoolingConv, self).__init__(**kwargs)
+		super(roiPooling, self).__init__(**kwargs)
 
 	def build(self, input_shape):
 		self.nb_channels = input_shape[0][3]
@@ -96,7 +94,7 @@ class roiPooling(Layer):
 			w = K.cast(w, 'int32')
 			h = K.cast(h, 'int32')
 
-			resizeRoI = tf.image.resize_images(img[:, y:y+h, x:x+w, :], (self.pool_size, self.pool_size))
+			resizeRoI = tf.image.resize(img[:, y:y+h, x:x+w, :], (self.pool_size, self.pool_size))
 			resizeRoIList.append(resizeRoI)
 
 		output = K.concatenate(resizeRoIList, axis=0)
@@ -107,14 +105,14 @@ class roiPooling(Layer):
 
 	def get_config(self):
 		config = {'pool_size': self.pool_size,'num_rois': self.num_rois}
-		base_config = super(RoiPoolingConv, self).get_config()
+		base_config = super(roiPooling, self).get_config()
 		return dict(list(base_config.items()) + list(config.items()))
 
 def classifierLayer(baseLayer, roiInput, roiNum = 4, classNum = 7):
 
 	pool_size = 7
 
-	roiPoolingResult = RoiPoolingConv(pool_size,roiNum)([baseLayer, roiInput])
+	roiPoolingResult = roiPooling(pool_size,roiNum)([baseLayer, roiInput])
 
 	x = TimeDistributed(Flatten(name = 'flatten'))(roiPoolingResult)
 
@@ -176,13 +174,13 @@ def trainModel():
 	classifier = classifierLayer(vggLayer,roi_input)
 
 	model_rpn = Model(img_input, rpn[:2])
-	model_classfier = Model([img_input,roiInput], classifier)
-	model_all = Model([img_input,roiInput], rpn[:2] + classifier)
+	model_classifier = Model([img_input,roi_input], classifier)
+	model_all = Model([img_input,roi_input], rpn[:2] + classifier)
 
 	optimizer = Adam(lr = 1e-5)
-	optimizer_classfier = Adam(lr = 1e-5)
+	optimizer_classifier = Adam(lr = 1e-5)
 	model_rpn.compile(optimizer = optimizer, loss = [rpn_loss_cls(anchorNum), rpn_loss_regr(anchorNum)])
-	model_classfier.compile(optimizer = optimizer_classfier, loss = [class_loss_cls, class_loss_regr(classNum - 1)], metrics={'dense_class_{}'.format(classNum): 'accuracy'})
+	model_classifier.compile(optimizer = optimizer_classifier, loss = [class_loss_cls, class_loss_regr(classNum - 1)], metrics={'dense_class_{}'.format(classNum): 'accuracy'})
 	model_all.compile(optimizer = 'sgd', loss = 'mae')
 
 	modelPath = '/content/drive/My Drive/Colab Notebooks/model/'
@@ -214,8 +212,8 @@ def trainModel():
 		print('Already train %dK batches'% (len(record_df)))
 
 	num_epochs = 40
-	epochLength = 2000
-	iterNum = 0
+	epoch_length = 2000
+	iter_num = 0
 	total_epochs = len(record_df) + num_epochs
 	r_epochs = len(record_df)
 
@@ -238,7 +236,7 @@ def trainModel():
 
 		while True:
 			try:
-				if len(rpn_accuracy_rpn_monitor) == epoch_length and C.verbose:
+				if len(rpn_accuracy_rpn_monitor) == epoch_length:
 					mean_overlapping_bboxes = float(sum(rpn_accuracy_rpn_monitor))/len(rpn_accuracy_rpn_monitor)
 					rpn_accuracy_rpn_monitor = []
 					if mean_overlapping_bboxes == 0:
@@ -256,7 +254,7 @@ def trainModel():
 				selectSamples,posNum = dataProcessor.roiSelect(Y1)
 				rpn_accuracy_rpn_monitor.append(posNum)
 				rpn_accuracy_for_epoch.append(posNum)
-				loss_class = model_classfier.train_on_batch([X, X2[:, selectSamples, :]], [Y1[:, selectSamples, :], Y2[:, selectSamples, :]])
+				loss_class = model_classifier.train_on_batch([X, X2[:, selectSamples, :]], [Y1[:, selectSamples, :], Y2[:, selectSamples, :]])
 				losses[iter_num, 0] = loss_rpn[1]
 				losses[iter_num, 1] = loss_rpn[2]
 
@@ -264,12 +262,12 @@ def trainModel():
 				losses[iter_num, 3] = loss_class[2]
 				losses[iter_num, 4] = loss_class[3]
 
-				iterNum += 1
+				iter_num += 1
 
 				progbar.update(iter_num, [('rpn_cls', np.mean(losses[:iter_num, 0])), ('rpn_regr', np.mean(losses[:iter_num, 1])),
 									('final_cls', np.mean(losses[:iter_num, 2])), ('final_regr', np.mean(losses[:iter_num, 3]))])
 
-				if iterNum == epochLength:
+				if iter_num == epoch_length:
 					loss_rpn_cls = np.mean(losses[:, 0])
 					loss_rpn_regr = np.mean(losses[:, 1])
 					loss_class_cls = np.mean(losses[:, 2])
