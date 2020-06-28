@@ -79,7 +79,7 @@ def augmentImg(singleImg,useAugment = True):
 
 	return imgData,img
 
-def resizeImg(oriWidth,oriHeight,limit = 300):
+def resizeImg(oriWidth,oriHeight,limit = 600):
 	if oriWidth <= oriHeight:
 		div = float(limit) / oriWidth
 		outWidth = limit
@@ -117,11 +117,20 @@ def calcAnchors(imgData,width,height,resizeWidth,resizeHeight,shrinkFactor = 16)
 	maxIoU = 0.7
 	anchorNum = 9
 	anchorSize = [64,128,256]
-	anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
-	outWidth = resizeWidth // shrinkFactor
-	outHeight = resizeHeight // shrinkFactor
-	shrinkFactor = float(shrinkFactor)
+	#anchorSize = [128,256,512]
+	#anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
+	anchorRatio = [[1, 1], [1, 2], [2, 1]]
+	tempWidth = resizeWidth + 6
+	tempHeight = resizeHeight + 6
+	filterSize = [7, 3, 1, 1]
+	stride = 2
+	for filter_item in filterSize:
+		tempWidth = (tempWidth - filter_item + stride) // stride
+		tempHeight = (tempHeight - filter_item + stride) // stride
 
+	outWidth = tempWidth
+	outHeight = tempHeight
+	shrinkFactor = float(shrinkFactor)
 	anc_obj = np.zeros((outHeight, outWidth, anchorNum))
 	anc_valid = np.zeros((outHeight, outWidth, anchorNum))
 	anc_regr = np.zeros((outHeight, outWidth, anchorNum * 4))
@@ -330,7 +339,9 @@ def proposalCreator(rpn_class, rpn_regr, max_boxes = 300, overlap_threshold = 0.
 
 	rpn_regr = rpn_regr / stdevScaleFactor
 	anchorSize = [64,128,256]
-	anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
+	#anchorSize = [128,256,512]
+	#anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
+	anchorRatio = [[1, 1], [1, 2], [2, 1]]
 	
 	(rows,cols) = rpn_class.shape[1:3]
 	curLayer = 0
@@ -472,7 +483,7 @@ def roiHead(anchorMatrix, imgData):
 	Y2 = np.concatenate([np.array(regrLabel),np.array(regrCoord)],axis=1)
 	return np.expand_dims(X2,axis = 0), np.expand_dims(Y1,axis = 0), np.expand_dims(Y2,axis = 0)
 
-def roiSelect(Y1,roiNum = 4):
+def roiSelect(Y1,roiNum = 8):
 	
 	negSamples = np.where(Y1[0, :, -1] == 1)
 	posSamples = np.where(Y1[0, :, -1] == 0)

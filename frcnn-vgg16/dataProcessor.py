@@ -522,6 +522,7 @@ def getData(imgInfo,basePath = '/content/drive/My Drive/Colab Notebooks/',useAug
 
 				img = img.astype(np.float32)
 				channelMean = [103.939, 116.779, 123.68]
+
 				img[:,:,0] = img[:,:,0] - channelMean[0]
 				img[:,:,1] = img[:,:,1] - channelMean[1]
 				img[:,:,2] = img[:,:,2] - channelMean[2]

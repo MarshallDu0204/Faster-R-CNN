@@ -9,8 +9,8 @@ import time
 
 from keras import backend as K
 from keras.optimizers import Adam, SGD, RMSprop
-from keras.layers import Flatten, Dense, Input, Conv2D, MaxPooling2D, Dropout
-from keras.layers import GlobalAveragePooling2D, GlobalMaxPooling2D, TimeDistributed
+from keras.layers import Flatten, Dense, Input, Conv2D, MaxPooling2D, Dropout, Add, Activation, ZeroPadding2D
+from keras.layers import GlobalAveragePooling2D, GlobalMaxPooling2D, TimeDistributed, AveragePooling2D, BatchNormalization
 from keras.engine.topology import get_source_inputs
 from keras.utils import layer_utils
 from keras.utils.data_utils import get_file
@@ -24,32 +24,210 @@ sys.path.append('/content/drive/My Drive/Colab Notebooks/')
 import dataProcessor
 import dataGenerator
 
-def vgg16(input_tensor=None,trainable = False):
+class FixedBatchNormalization(Layer):
+
+	def __init__(self, epsilon=1e-3, axis=-1,
+				 weights=None, beta_init='zero', gamma_init='one',
+				 gamma_regularizer=None, beta_regularizer=None, **kwargs):
+
+		self.supports_masking = True
+		self.beta_init = initializers.get(beta_init)
+		self.gamma_init = initializers.get(gamma_init)
+		self.epsilon = epsilon
+		self.axis = axis
+		self.gamma_regularizer = regularizers.get(gamma_regularizer)
+		self.beta_regularizer = regularizers.get(beta_regularizer)
+		self.initial_weights = weights
+		super(FixedBatchNormalization, self).__init__(**kwargs)
+
+	def build(self, input_shape):
+		self.input_spec = [InputSpec(shape=input_shape)]
+		shape = (input_shape[self.axis],)
+
+		self.gamma = self.add_weight(shape = shape,
+									 initializer=self.gamma_init,
+									 regularizer=self.gamma_regularizer,
+									 name='{}_gamma'.format(self.name),
+									 trainable=False)
+		self.beta = self.add_weight(shape = shape,
+									initializer=self.beta_init,
+									regularizer=self.beta_regularizer,
+									name='{}_beta'.format(self.name),
+									trainable=False)
+		self.running_mean = self.add_weight(shape = shape, initializer='zero',
+											name='{}_running_mean'.format(self.name),
+											trainable=False)
+		self.running_std = self.add_weight(shape = shape, initializer='one',
+										   name='{}_running_std'.format(self.name),
+										   trainable=False)
+
+		if self.initial_weights is not None:
+			self.set_weights(self.initial_weights)
+			del self.initial_weights
+
+		self.built = True
+
+	def call(self, x, mask=None):
+
+		assert self.built, 'Layer must be built before being called'
+		input_shape = K.int_shape(x)
+
+		reduction_axes = list(range(len(input_shape)))
+		del reduction_axes[self.axis]
+		broadcast_shape = [1] * len(input_shape)
+		broadcast_shape[self.axis] = input_shape[self.axis]
+
+		if sorted(reduction_axes) == range(K.ndim(x))[:-1]:
+			x_normed = K.batch_normalization(
+				x, self.running_mean, self.running_std,
+				self.beta, self.gamma,
+				epsilon=self.epsilon)
+		else:
+			# need broadcasting
+			broadcast_running_mean = K.reshape(self.running_mean, broadcast_shape)
+			broadcast_running_std = K.reshape(self.running_std, broadcast_shape)
+			broadcast_beta = K.reshape(self.beta, broadcast_shape)
+			broadcast_gamma = K.reshape(self.gamma, broadcast_shape)
+			x_normed = K.batch_normalization(
+				x, broadcast_running_mean, broadcast_running_std,
+				broadcast_beta, broadcast_gamma,
+				epsilon=self.epsilon)
+
+		return x_normed
+
+	def get_config(self):
+		config = {'epsilon': self.epsilon,
+				  'axis': self.axis,
+				  'gamma_regularizer': self.gamma_regularizer.get_config() if self.gamma_regularizer else None,
+				  'beta_regularizer': self.beta_regularizer.get_config() if self.beta_regularizer else None}
+		base_config = super(FixedBatchNormalization, self).get_config()
+		return dict(list(base_config.items()) + list(config.items()))
+
+def identity_block(input_tensor, filters, stage, block, trainable = False):
+	conv_name_base = 'res' + str(stage) + block + '_branch'
+	bn_name_base = 'bn' + str(stage) + block + '_branch'
+
+	x = Conv2D(filters[0], (1, 1), name = conv_name_base + '2a', trainable = trainable)(input_tensor)
+	x = FixedBatchNormalization(axis = 3, name = bn_name_base + '2a')(x)
+	x = Activation('relu')(x)
+
+	x = Conv2D(filters[1], (3, 3), padding = 'same', name = conv_name_base + '2b', trainable = trainable)(x)
+	x = FixedBatchNormalization(axis = 3, name = bn_name_base + '2b')(x)
+	x = Activation('relu')(x)
+
+	x = Conv2D(filters[2], (1, 1), name = conv_name_base + '2c', trainable = trainable)(x)
+	x = FixedBatchNormalization(axis = 3, name = bn_name_base + '2c')(x)
+
+	x = Add()([x, input_tensor])
+	x = Activation('relu')(x)
+	return x
+
+def conv_block(input_tensor, filters, stage, block, strides = (2, 2), trainable = False):
+	conv_name_base = 'res' + str(stage) + block + '_branch'
+	bn_name_base = 'bn' + str(stage) + block + '_branch'
+
+	x = Conv2D(filters[0], (1, 1), strides = strides, name = conv_name_base + '2a', trainable = trainable)(input_tensor)
+	x = FixedBatchNormalization(axis = 3, name = bn_name_base + '2a')(x)
+	x = Activation('relu')(x)
+
+	x = Conv2D(filters[1], (3, 3), padding = 'same', name = conv_name_base + '2b', trainable = trainable)(x)
+	x = FixedBatchNormalization(axis = 3, name = bn_name_base + '2b')(x)
+	x = Activation('relu')(x)
+
+	x = Conv2D(filters[2], (1, 1), name = conv_name_base + '2c', trainable = trainable)(x)
+	x = FixedBatchNormalization(axis = 3, name = bn_name_base + '2c')(x)
+
+	x1 = Conv2D(filters[2], (1, 1), strides = strides, name = conv_name_base + '1', trainable = trainable)(input_tensor)
+	x1 = FixedBatchNormalization(axis = 3, name = bn_name_base + '1')(x1)
+
+	x = Add()([x, x1])
+	x = Activation('relu')(x)
+	return x
+
+def identity_block_td(input_tensor, filters, stage, block):
+	conv_name_base = 'res' + str(stage) + block + '_branch'
+	bn_name_base = 'bn' + str(stage) + block + '_branch'
+
+	x = TimeDistributed(Conv2D(filters[0], (1, 1), kernel_initializer = 'normal'), name = conv_name_base + '2a')(input_tensor)
+	x = TimeDistributed(FixedBatchNormalization(axis = 3), name = bn_name_base + '2a')(x)
+	x = Activation('relu')(x)
+
+	x = TimeDistributed(Conv2D(filters[1], (3, 3), padding = 'same', kernel_initializer = 'normal'), name = conv_name_base + '2b')(x)
+	x = TimeDistributed(FixedBatchNormalization(axis = 3), name = bn_name_base + '2b')(x)
+	x = Activation('relu')(x)
+
+	x = TimeDistributed(Conv2D(filters[2], (1, 1), kernel_initializer = 'normal'), name = conv_name_base + '2c')(x)
+	x = TimeDistributed(FixedBatchNormalization(axis = 3), name = bn_name_base + '2c')(x)
+
+	x = Add()([x, input_tensor])
+	x = Activation('relu')(x)
+	return x
+
+def conv_block_td(input_tensor, filters, stage, block, strides = (2, 2)):
+	conv_name_base = 'res' + str(stage) + block + '_branch'
+	bn_name_base = 'bn' + str(stage) + block + '_branch'
+	
+	x = TimeDistributed(Conv2D(filters[0], (1, 1), strides = strides, kernel_initializer = 'normal'), input_shape = (8, 7, 7, 1024), name = conv_name_base + '2a')(input_tensor)
+	x = TimeDistributed(FixedBatchNormalization(axis = 3), name = bn_name_base + '2a')(x)
+	x = Activation('relu')(x)
+
+	x = TimeDistributed(Conv2D(filters[1], (3, 3), padding = 'same', kernel_initializer = 'normal'), name = conv_name_base + '2b')(x)
+	x = TimeDistributed(FixedBatchNormalization(axis = 3), name=bn_name_base + '2b')(x)
+	x = Activation('relu')(x)
+
+	x = TimeDistributed(Conv2D(filters[2], (1, 1), kernel_initializer = 'normal'), name = conv_name_base + '2c')(x)
+	x = TimeDistributed(FixedBatchNormalization(axis = 3), name = bn_name_base + '2c')(x)
+
+	x1 = TimeDistributed(Conv2D(filters[2], (1, 1), strides = strides, kernel_initializer = 'normal'), name = conv_name_base + '1')(input_tensor)
+	x1 = TimeDistributed(FixedBatchNormalization(axis = 3), name = bn_name_base + '1')(x1)
+
+	x = Add()([x, x1])
+	x = Activation('relu')(x)
+	return x
+
+def resNet101(input_tensor = None,trainable = False):
 
 	inputImg = input_tensor
-
-	x = Conv2D(64, (3,3), activation = 'relu', padding = 'same', name = 'block1_conv1')(inputImg)
-	x = Conv2D(64, (3,3), activation = 'relu', padding = 'same', name = 'block1_conv2')(x)
-	x = MaxPooling2D((2,2), strides = (2,2), name='block1_pool')(x)
-
-	x = Conv2D(128, (3,3), activation = 'relu', padding = 'same', name = 'block2_conv1')(x)
-	x = Conv2D(128, (3,3), activation = 'relu', padding = 'same', name = 'block2_conv2')(x)
-	x = MaxPooling2D((2,2), strides = (2,2), name='block2_pool')(x)
-
-	x = Conv2D(256,(3,3), activation = 'relu', padding = 'same', name = 'block3_conv1')(x)
-	x = Conv2D(256,(3,3), activation = 'relu', padding = 'same', name = 'block3_conv2')(x)
-	x = Conv2D(256,(3,3), activation = 'relu', padding = 'same', name = 'block3_conv3')(x)
-	x = MaxPooling2D((2,2), strides = (2,2), name='block3_pool')(x)
-
-	x = Conv2D(512,(3,3), activation = 'relu', padding = 'same', name = 'block4_conv1')(x)
-	x = Conv2D(512,(3,3), activation = 'relu', padding = 'same', name = 'block4_conv2')(x)
-	x = Conv2D(512,(3,3), activation = 'relu', padding = 'same', name = 'block4_conv3')(x)
-	x = MaxPooling2D((2,2), strides = (2,2), name='block4_pool')(x)
-
-	x = Conv2D(512,(3,3), activation = 'relu', padding = 'same', name = 'block5_conv1')(x)
-	x = Conv2D(512,(3,3), activation = 'relu', padding = 'same', name = 'block5_conv2')(x)
-	x = Conv2D(512,(3,3), activation = 'relu', padding = 'same', name = 'block5_conv3')(x)
+	x = ZeroPadding2D((3, 3))(inputImg)
 	
+	x = Conv2D(64, (7, 7), strides = (2, 2), name = 'conv1')(x)
+	x = FixedBatchNormalization(axis = 3, name = 'bn_conv1')(x)
+	x = Activation('relu')(x)
+	x = MaxPooling2D((3, 3), strides = (2, 2))(x)
+
+	x = conv_block(x, [64, 64, 256], 2, 'a', strides = (1, 1))
+	x = identity_block(x, [64, 64, 256], 2, 'b')
+	x = identity_block(x, [64, 64, 256], 2, 'c')
+
+	x = conv_block(x, [128, 128, 512], 3, 'a')
+	x = identity_block(x, [128, 128, 512], 3, 'b')
+	x = identity_block(x, [128, 128, 512], 3, 'c')
+	x = identity_block(x, [128, 128, 512], 3, 'd')
+
+	x = conv_block(x, [256, 256, 1024], 4, 'a')
+	x = identity_block(x, [256, 256, 1024], 4, 'b')
+	x = identity_block(x, [256, 256, 1024], 4, 'c')
+	x = identity_block(x, [256, 256, 1024], 4, 'd')
+	x = identity_block(x, [256, 256, 1024], 4, 'e')
+	x = identity_block(x, [256, 256, 1024], 4, 'f')
+	x = identity_block(x, [256, 256, 1024], 4, 'g')
+	x = identity_block(x, [256, 256, 1024], 4, 'h')
+	x = identity_block(x, [256, 256, 1024], 4, 'i')
+	x = identity_block(x, [256, 256, 1024], 4, 'j')
+	x = identity_block(x, [256, 256, 1024], 4, 'k')
+	x = identity_block(x, [256, 256, 1024], 4, 'l')
+	x = identity_block(x, [256, 256, 1024], 4, 'm')
+	x = identity_block(x, [256, 256, 1024], 4, 'n')
+	x = identity_block(x, [256, 256, 1024], 4, 'o')
+	x = identity_block(x, [256, 256, 1024], 4, 'p')
+	x = identity_block(x, [256, 256, 1024], 4, 'q')
+	x = identity_block(x, [256, 256, 1024], 4, 'r')
+	x = identity_block(x, [256, 256, 1024], 4, 's')
+	x = identity_block(x, [256, 256, 1024], 4, 't')
+	x = identity_block(x, [256, 256, 1024], 4, 'u')
+	x = identity_block(x, [256, 256, 1024], 4, 'v')
+	x = identity_block(x, [256, 256, 1024], 4, 'w')
+
 	return x
 
 def rpnLayer(baseLayer,anchorNum = 9):
@@ -108,19 +286,18 @@ class roiPooling(Layer):
 		base_config = super(roiPooling, self).get_config()
 		return dict(list(base_config.items()) + list(config.items()))
 
-def classifierLayer(baseLayer, roiInput, roiNum = 4, classNum = 7):
+def classifierLayer(baseLayer, roiInput, roiNum = 8, classNum = 7):
 
 	pool_size = 7
 
 	roiPoolingResult = roiPooling(pool_size,roiNum)([baseLayer, roiInput])
 
-	x = TimeDistributed(Flatten(name = 'flatten'))(roiPoolingResult)
+	x = conv_block_td(roiPoolingResult, [512, 512, 2048], 5, 'a', strides = (1, 1))
+	x = identity_block_td(x, [512, 512, 2048], 5, 'b')
+	x = identity_block_td(x, [512, 512, 2048], 5, 'c')
+	x = TimeDistributed(AveragePooling2D((7, 7)), name = 'avg_pool')(x)
 
-	x = TimeDistributed(Dense(4096, activation = 'relu', name = 'fc1'))(x)
-	x = TimeDistributed(Dropout(0.5))(x)
-
-	x = TimeDistributed(Dense(4096, activation = 'relu', name = 'fc2'))(x)
-	result = TimeDistributed(Dropout(0.5))(x)
+	result = TimeDistributed(Flatten(name='flatten'))(x)
 
 	resultClass = TimeDistributed(Dense(classNum, activation = 'softmax', kernel_initializer = 'zero'), name = 'dense_class_{}'.format(classNum))(result)
 
@@ -158,20 +335,21 @@ def class_loss_cls(y_true, y_pred):
 	return 1.0 * K.mean(categorical_crossentropy(y_true[0, :, :], y_pred[0, :, :]))
 
 def trainModel():
+	
 	imgList = dataProcessor.readJson()
 	random.seed(1)
 	random.shuffle(imgList)
 	trainData = dataProcessor.getData(imgList)
-
+	
 	img_input = Input(shape=(None, None, 3))
 	roi_input = Input(shape=(None, 4))
 
 	anchorNum = 9
 	classNum = 7
 
-	vggLayer = vgg16(input_tensor = img_input, trainable = True)
-	rpn = rpnLayer(vggLayer)
-	classifier = classifierLayer(vggLayer,roi_input)
+	resNet = resNet101(input_tensor = img_input, trainable = True)
+	rpn = rpnLayer(resNet)
+	classifier = classifierLayer(resNet,roi_input)
 
 	model_rpn = Model(img_input, rpn[:2])
 	model_classifier = Model([img_input,roi_input], classifier)
@@ -182,20 +360,21 @@ def trainModel():
 	model_rpn.compile(optimizer = optimizer, loss = [rpn_loss_cls(anchorNum), rpn_loss_regr(anchorNum)])
 	model_classifier.compile(optimizer = optimizer_classifier, loss = [class_loss_cls, class_loss_regr(classNum - 1)], metrics={'dense_class_{}'.format(classNum): 'accuracy'})
 	model_all.compile(optimizer = 'sgd', loss = 'mae')
-
+	
 	modelPath = '/content/drive/My Drive/Colab Notebooks/model/'
-	record_path = modelPath + 'record.csv'
+	record_path = modelPath + 'record_resnet.csv'
 
-	if not os.path.isfile(modelPath + 'frcnn_vgg.hdf5'):
+	if not os.path.isfile(modelPath + 'frcnn_resnet101.hdf5'):
 		try:
-			model_rpn.load_weights(modelPath + 'vgg16_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
-			model_classifier.load_weights(modelPath + 'vgg16_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
+			model_rpn.load_weights(modelPath + 'resnet101_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
+			model_classifier.load_weights(modelPath + 'resnet101_weights_tf_dim_ordering_tf_kernels.h5', by_name=True)
+			print('load success')
 		except:
 			print('load weights failed')
 		record_df = pd.DataFrame(columns=['mean_overlapping_bboxes', 'class_acc', 'loss_rpn_cls', 'loss_rpn_regr', 'loss_class_cls', 'loss_class_regr', 'curr_loss', 'elapsed_time', 'mAP'])
 	else:
-		model_rpn.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
-		model_classifier.load_weights(modelPath + 'frcnn_vgg.hdf5', by_name=True)
+		model_rpn.load_weights(modelPath + 'frcnn_resnet101.hdf5', by_name=True)
+		model_classifier.load_weights(modelPath + 'frcnn_resnet101.hdf5', by_name=True)
 
 		record_df = pd.read_csv(record_path)
 
@@ -293,7 +472,7 @@ def trainModel():
 
 					if curr_loss < best_loss:
 						best_loss = curr_loss
-						model_all.save_weights(modelPath + 'frcnn_vgg.hdf5')
+						model_all.save_weights(modelPath + 'frcnn_resnet101.hdf5')
 
 					new_row = {'mean_overlapping_bboxes':round(mean_overlapping_bboxes, 3),
 							'class_acc':round(class_acc, 3), 
@@ -313,6 +492,7 @@ def trainModel():
 				print(e)
 				continue
 	print('Train Complete!')
+	
 
 def testModel():
 	pass
