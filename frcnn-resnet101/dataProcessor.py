@@ -483,7 +483,7 @@ def roiHead(anchorMatrix, imgData):
 	Y2 = np.concatenate([np.array(regrLabel),np.array(regrCoord)],axis=1)
 	return np.expand_dims(X2,axis = 0), np.expand_dims(Y1,axis = 0), np.expand_dims(Y2,axis = 0)
 
-def roiSelect(Y1,roiNum = 4):
+def roiSelect(Y1,roiNum = 8):
 	
 	negSamples = np.where(Y1[0, :, -1] == 1)
 	posSamples = np.where(Y1[0, :, -1] == 0)
