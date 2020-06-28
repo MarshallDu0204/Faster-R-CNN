@@ -116,10 +116,10 @@ def calcAnchors(imgData,width,height,resizeWidth,resizeHeight,shrinkFactor = 16)
 	minIoU = 0.3
 	maxIoU = 0.7
 	anchorNum = 9
-	anchorSize = [64,128,256]
-	#anchorSize = [128,256,512]
-	#anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
-	anchorRatio = [[1, 1], [1, 2], [2, 1]]
+	#anchorSize = [64,128,256]
+	anchorSize = [128,256,512]
+	anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
+	#anchorRatio = [[1, 1], [1, 2], [2, 1]]
 	tempWidth = resizeWidth + 6
 	tempHeight = resizeHeight + 6
 	filterSize = [7, 3, 1, 1]
@@ -338,10 +338,10 @@ def proposalCreator(rpn_class, rpn_regr, max_boxes = 300, overlap_threshold = 0.
 	stdevScaleFactor = 4.0
 
 	rpn_regr = rpn_regr / stdevScaleFactor
-	anchorSize = [64,128,256]
-	#anchorSize = [128,256,512]
-	#anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
-	anchorRatio = [[1, 1], [1, 2], [2, 1]]
+	#anchorSize = [64,128,256]
+	anchorSize = [128,256,512]
+	anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
+	#anchorRatio = [[1, 1], [1, 2], [2, 1]]
 	
 	(rows,cols) = rpn_class.shape[1:3]
 	curLayer = 0
@@ -483,7 +483,7 @@ def roiHead(anchorMatrix, imgData):
 	Y2 = np.concatenate([np.array(regrLabel),np.array(regrCoord)],axis=1)
 	return np.expand_dims(X2,axis = 0), np.expand_dims(Y1,axis = 0), np.expand_dims(Y2,axis = 0)
 
-def roiSelect(Y1,roiNum = 8):
+def roiSelect(Y1,roiNum = 4):
 	
 	negSamples = np.where(Y1[0, :, -1] == 1)
 	posSamples = np.where(Y1[0, :, -1] == 0)

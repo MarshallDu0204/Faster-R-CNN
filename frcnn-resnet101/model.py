@@ -167,7 +167,7 @@ def conv_block_td(input_tensor, filters, stage, block, strides = (2, 2)):
 	conv_name_base = 'res' + str(stage) + block + '_branch'
 	bn_name_base = 'bn' + str(stage) + block + '_branch'
 	
-	x = TimeDistributed(Conv2D(filters[0], (1, 1), strides = strides, kernel_initializer = 'normal'), input_shape = (8, 7, 7, 1024), name = conv_name_base + '2a')(input_tensor)
+	x = TimeDistributed(Conv2D(filters[0], (1, 1), strides = strides, kernel_initializer = 'normal'), input_shape = (4, 14, 14, 1024), name = conv_name_base + '2a')(input_tensor)
 	x = TimeDistributed(FixedBatchNormalization(axis = 3), name = bn_name_base + '2a')(x)
 	x = Activation('relu')(x)
 
@@ -286,13 +286,13 @@ class roiPooling(Layer):
 		base_config = super(roiPooling, self).get_config()
 		return dict(list(base_config.items()) + list(config.items()))
 
-def classifierLayer(baseLayer, roiInput, roiNum = 8, classNum = 7):
+def classifierLayer(baseLayer, roiInput, roiNum = 4, classNum = 7):
 
-	pool_size = 7
+	pool_size = 14
 
 	roiPoolingResult = roiPooling(pool_size,roiNum)([baseLayer, roiInput])
 
-	x = conv_block_td(roiPoolingResult, [512, 512, 2048], 5, 'a', strides = (1, 1))
+	x = conv_block_td(roiPoolingResult, [512, 512, 2048], 5, 'a', strides = (2, 2))
 	x = identity_block_td(x, [512, 512, 2048], 5, 'b')
 	x = identity_block_td(x, [512, 512, 2048], 5, 'c')
 	x = TimeDistributed(AveragePooling2D((7, 7)), name = 'avg_pool')(x)
@@ -390,7 +390,7 @@ def trainModel():
 
 		print('Already train %dK batches'% (len(record_df)))
 
-	num_epochs = 40
+	num_epochs = 200
 	epoch_length = 2000
 	iter_num = 0
 	total_epochs = len(record_df) + num_epochs
