@@ -212,8 +212,8 @@ def trainModel():
 
 		print('Already train %dK batches'% (len(record_df)))
 
-	num_epochs = 40
-	epoch_length = 2000
+	num_epochs = 120
+	epoch_length = 1000
 	iter_num = 0
 	total_epochs = len(record_df) + num_epochs
 	r_epochs = len(record_df)
@@ -315,6 +315,31 @@ def trainModel():
 				continue
 	print('Train Complete!')
 
+def apply_regr(x, y, w, h, tx, ty, tw, th):
+	try:
+		cx = x + w/2.
+		cy = y + h/2.
+		cx1 = tx * w + cx
+		cy1 = ty * h + cy
+		w1 = math.exp(tw) * w
+		h1 = math.exp(th) * h
+		x1 = cx1 - w1/2.
+		y1 = cy1 - h1/2.
+		x1 = int(round(x1))
+		y1 = int(round(y1))
+		w1 = int(round(w1))
+		h1 = int(round(h1))
+
+		return x1, y1, w1, h1
+
+	except ValueError:
+		return x, y, w, h
+	except OverflowError:
+		return x, y, w, h
+	except Exception as e:
+		print(e)
+		return x, y, w, h
+
 def format_img_size(img):
 	img_min_side = float(300)
 	(height,width,_) = img.shape
@@ -330,20 +355,20 @@ def format_img_size(img):
 	img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
 	return img, ratio	
 
-def format_img_channels(img, C):
+def format_img_channels(img):
 	#img = img[:, :, (2, 1, 0)]
+	channelMean = [103.939, 116.779, 123.68]
 	img = img.astype(np.float32)
-	img[:, :, 0] -= C.img_channel_mean[0]
-	img[:, :, 1] -= C.img_channel_mean[1]
-	img[:, :, 2] -= C.img_channel_mean[2]
-	img /= C.img_scaling_factor
+	img[:, :, 0] -= channelMean[0]
+	img[:, :, 1] -= channelMean[1]
+	img[:, :, 2] -= channelMean[2]
 	img = np.transpose(img, (2, 0, 1))
 	img = np.expand_dims(img, axis=0)
 	return img
 
-def format_img(img, C):
-	img, ratio = format_img_size(img, C)
-	img = format_img_channels(img, C)
+def format_img(img):
+	img, ratio = format_img_size(img)
+	img = format_img_channels(img)
 	return img, ratio
 
 def get_real_coordinates(ratio, x1, y1, x2, y2):
@@ -365,14 +390,109 @@ def predictModel():
 
 	vggLayer = vgg16(input_tensor = img_input, trainable = True)
 	rpn = rpnLayer(vggLayer)
-	classifier = classifierLayer(vggLayer,roi_input)
+	classifier = classifierLayer(feature_input,roi_input)
 
-	model_rpn = Model(img_input, rpn[:2])
-	model_classifier_only = Model([img_input,roi_input], classifier)
-	model_classifier = Model([img_input,roi_input], classifier)
+	model_rpn = Model(img_input, rpn)
+	model_classifier_only = Model([feature_input,roi_input], classifier)
+	model_classifier = Model([feature_input,roi_input], classifier)
 
-	model_rpn.load_weights(C.model_path, by_name=True)
-	model_classifier.load_weights(C.model_path, by_name=True)
+	modelPath = '/content/drive/My Drive/Colab Notebooks/model/'
+
+	model_rpn.load_weights(modelPath + 'frcnn_vgg16.hdf5', by_name=True)
+	model_classifier.load_weights(modelPath + 'frcnn_vgg16.hdf5', by_name=True)
 
 	model_rpn.compile(optimizer='sgd', loss='mse')
 	model_classifier.compile(optimizer='sgd', loss='mse')
+
+	imgList = dataProcessor.readJson()
+	random.seed(1)
+	random.shuffle(imgList)
+	imgList = imgList[:10]
+
+	class_mapping = {'Person':0, 'Laptop':1, 'Cat':2, 'Mobile phone':3, 'Car':4, 'Human face':5, 'BG':6}
+	class_mapping = {v: k for k, v in class_mapping.items()}
+	class_to_color = {class_mapping[v]: np.random.randint(0, 255, 3) for v in class_mapping}
+
+	for img in imgList:
+		path = img['path']
+		img = cv2.imread(img)
+		X,ratio = format_img(img)
+		X = np.transpose(X, (0, 2, 3, 1))
+		proposal = model_rpn.predict(X)
+		roi = dataProcessor.proposalCreator(proposal[0], proposal[1])
+		roi[:, 2] -= roi[:, 0]
+		roi[:, 3] -= roi[:, 1]
+
+		bboxes = {}
+		probs = {}
+
+		for jk in range(roi.shape[0]//4 + 1):
+			ROIs = np.expand_dims(roi[4 * jk:4 * (jk+1), :], axis=0)
+			if ROIs.shape[1] == 0:
+				break
+
+			if jk == roi.shape[0]//4:
+				curr_shape = ROIs.shape
+				target_shape = (curr_shape[0],4,curr_shape[2])
+				ROIs_padded = np.zeros(target_shape).astype(ROIs.dtype)
+				ROIs_padded[:, :curr_shape[1], :] = ROIs
+				ROIs_padded[0, curr_shape[1]:, :] = ROIs[0, 0, :]
+				ROIs = ROIs_padded
+
+			[P_cls, P_regr] = model_classifier_only.predict([proposal[2], ROIs])
+			# Calculate bboxes coordinates on resized image
+			for ii in range(P_cls.shape[1]):
+				# Ignore 'bg' class
+				if np.max(P_cls[0, ii, :]) < bbox_threshold or np.argmax(P_cls[0, ii, :]) == (P_cls.shape[2] - 1):
+					continue
+
+				cls_name = class_mapping[np.argmax(P_cls[0, ii, :])]
+
+				if cls_name not in bboxes:
+					bboxes[cls_name] = []
+					probs[cls_name] = []
+
+				(x, y, w, h) = ROIs[0, ii, :]
+
+				cls_num = np.argmax(P_cls[0, ii, :])
+				try:
+					(tx, ty, tw, th) = P_regr[0, ii, 4*cls_num:4*(cls_num+1)]
+					tx /= regrStd[0]
+					ty /= regrStd[1]
+					tw /= regrStd[2]
+					th /= regrStd[3]
+					x, y, w, h = apply_regr(x, y, w, h, tx, ty, tw, th)
+				except:
+					pass
+				bboxes[cls_name].append([16*x, 16*y, 16*(x+w), 16*(y+h)])
+				probs[cls_name].append(np.max(P_cls[0, ii, :]))
+
+		all_dets = []
+
+		for key in bboxes:
+			bbox = np.array(bboxes[key])
+
+			new_boxes, new_probs = dataProcesspr.non_max_suppression_fast(bbox, np.array(probs[key]), overlap_thresh=0.2)
+			for jk in range(new_boxes.shape[0]):
+				print(new_boxes[jk,:])
+				(x1, y1, x2, y2) = new_boxes[jk,:]
+
+				# Calculate real coordinates on original image
+				(real_x1, real_y1, real_x2, real_y2) = get_real_coordinates(ratio, x1, y1, x2, y2)
+
+				cv2.rectangle(img,(real_x1, real_y1), (real_x2, real_y2), (int(class_to_color[key][0]), int(class_to_color[key][1]), int(class_to_color[key][2])),4)
+
+				textLabel = '{}: {}'.format(key,int(100*new_probs[jk]))
+				all_dets.append((key,100*new_probs[jk]))
+
+				(retval,baseLine) = cv2.getTextSize(textLabel,cv2.FONT_HERSHEY_COMPLEX,1,1)
+				textOrg = (real_x1, real_y1-0)
+
+				cv2.rectangle(img, (textOrg[0] - 5, textOrg[1]+baseLine - 5), (textOrg[0]+retval[0] + 5, textOrg[1]-retval[1] - 5), (0, 0, 0), 1)
+				cv2.rectangle(img, (textOrg[0] - 5,textOrg[1]+baseLine - 5), (textOrg[0]+retval[0] + 5, textOrg[1]-retval[1] - 5), (255, 255, 255), -1)
+				cv2.putText(img, textLabel, textOrg, cv2.FONT_HERSHEY_DUPLEX, 1, (0, 0, 0), 1)
+
+		print(all_dets)
+		plt.figure(figsize=(10,10))
+		plt.imshow(cv2.cvtColor(img,cv2.COLOR_BGR2RGB))
+		plt.show()

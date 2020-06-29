@@ -28,15 +28,15 @@ def getDataLength(path = 'oidv6-train-annotations-bbox.csv'):
 
 def getImgDict():
 	imgDict = {'/m/01g317':'Person', '/m/01c648':'Laptop',
-	'/m/01yrx':'Cat', '/m/06nrc':'Shotgun', '/m/0k4j':'Car', '/m/0dzct':'Human face'}
+	'/m/01yrx':'Cat', '/m/050k8':'Mobile phone', '/m/0k4j':'Car', '/m/0dzct':'Human face'}
 	return imgDict
 
 def getFullClass():
-	fullClass = {'Person':1, 'Laptop':2, 'Cat':3, 'Shotgun':4, 'Car':5, 'Human face':6, 'BG':7}
+	fullClass = {'Person':1, 'Laptop':2, 'Cat':3, 'Mobile phone':4, 'Car':5, 'Human face':6, 'BG':7}
 	return fullClass
 	
-def readData(chunkLen = 300000):
-	infoSet = {'/m/01g317', '/m/01c648', '/m/01yrx', '/m/06nrc', '/m/0k4j', '/m/0dzct'}
+def readData(chunkLen = 1500000):#1500000
+	infoSet = {'/m/01g317', '/m/01c648', '/m/01yrx', '/m/050k8', '/m/0k4j', '/m/0dzct'}
 	infoList = []
 	
 	chunks = pd.read_csv('oidv6-train-annotations-bbox.csv', chunksize = chunkLen)
@@ -58,6 +58,25 @@ def readData(chunkLen = 300000):
 			break
 
 	return infoList
+
+def balanceClass(infoList):
+	infoSet = {'/m/01g317', '/m/01c648', '/m/01yrx', '/m/050k8', '/m/0k4j', '/m/0dzct'}
+	countImg = {}
+	balancedImg = []
+	for info in tqdm(infoList):
+		if info[1] not in countImg:
+			countImg[info[1]] = set()
+			countImg[info[1]].add(info[0])
+			balancedImg.append(info)
+		else:
+			if len(countImg[info[1]]) <= 700:
+				balancedImg.append(info)
+				countImg[info[1]].add(info[0])
+
+	print(len(balancedImg))
+	for key in countImg:
+		print(len(countImg[key]))
+	return balancedImg
 
 def slice(arr, m):
 	n = int(math.ceil(len(arr) / float(m)))
@@ -139,7 +158,7 @@ def integrateImg(basePath = 'D://'):
 
 
 def retriveData(basePath = 'D://'):
-	chartDict = {'Person':1, 'Laptop':2, 'Cat':3, 'Shotgun':4, 'Car':5, 'Human face':6}
+	chartDict = {'Person':1, 'Laptop':2, 'Cat':3, 'Mobile phone':4, 'Car':5, 'Human face':6}
 
 	imgInfo = {}
 	imgInfoList = "imgInfo.txt"
@@ -205,6 +224,7 @@ def computeChannelMean(basePath = 'D://'):
 	#114.45 105.69 98.96
 '''
 infoList = readData()
+infoList = balanceClass(infoList)
 downloadImgThread(infoList,threadNum = 20)
 '''
 #integrateImg()

@@ -321,7 +321,7 @@ def non_max_suppression_fast(boxes, probs, overlap_threshold = 0.7, max_boxes = 
 
 	boxes = boxes[pick].astype("int")
 	probs = probs[pick]
-	return boxes
+	return boxes,probs
 
 def proposalCreator(rpn_class, rpn_regr, max_boxes = 300, overlap_threshold = 0.7):
 	shrinkFactor = 16.0
@@ -375,7 +375,7 @@ def proposalCreator(rpn_class, rpn_regr, max_boxes = 300, overlap_threshold = 0.
 	allAnchor = np.delete(allAnchor, illegalAnchor, 0)
 	allProb = np.delete(allProb, illegalAnchor, 0)
 
-	result = non_max_suppression_fast(allAnchor, allProb, overlap_threshold = overlap_threshold, max_boxes = max_boxes)
+	result,probs = non_max_suppression_fast(allAnchor, allProb, overlap_threshold = overlap_threshold, max_boxes = max_boxes)
 
 	return result
 
