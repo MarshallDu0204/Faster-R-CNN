@@ -116,10 +116,8 @@ def calcAnchors(imgData,width,height,resizeWidth,resizeHeight,shrinkFactor = 16)
 	minIoU = 0.3
 	maxIoU = 0.7
 	anchorNum = 9
-	#anchorSize = [64,128,256]
 	anchorSize = [128,256,512]
 	anchorRatio = [[1, 1], [1./math.sqrt(2), 2./math.sqrt(2)], [2./math.sqrt(2), 1./math.sqrt(2)]]
-	#anchorRatio = [[1, 1], [1, 2], [2, 1]]
 	tempWidth = resizeWidth + 6
 	tempHeight = resizeHeight + 6
 	filterSize = [7, 3, 1, 1]
@@ -330,7 +328,7 @@ def non_max_suppression_fast(boxes, probs, overlap_threshold = 0.7, max_boxes = 
 
 	boxes = boxes[pick].astype("int")
 	probs = probs[pick]
-	return boxes
+	return boxes,probs
 
 def proposalCreator(rpn_class, rpn_regr, max_boxes = 300, overlap_threshold = 0.7):
 	shrinkFactor = 16.0
@@ -386,7 +384,7 @@ def proposalCreator(rpn_class, rpn_regr, max_boxes = 300, overlap_threshold = 0.
 	allAnchor = np.delete(allAnchor, illegalAnchor, 0)
 	allProb = np.delete(allProb, illegalAnchor, 0)
 
-	result = non_max_suppression_fast(allAnchor, allProb, overlap_threshold = overlap_threshold, max_boxes = max_boxes)
+	result,probs = non_max_suppression_fast(allAnchor, allProb, overlap_threshold = overlap_threshold, max_boxes = max_boxes)
 
 	return result
 
