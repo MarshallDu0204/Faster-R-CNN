@@ -1003,7 +1003,7 @@ horizontal_flips = True
 vertical_flips = True   
 rot_90 = True          
 
-output_weight_path = os.path.join(base_path, 'model/model_frcnn_resnet101.hdf5')
+output_weight_path = os.path.join(base_path, 'model/model_frcnn_resnet50.hdf5')
 
 record_path = os.path.join(base_path, 'model/record_resnet.csv') 
 
